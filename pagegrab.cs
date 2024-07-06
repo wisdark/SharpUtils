@@ -18,6 +18,10 @@ using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 
+// Needed for SSL / TLS certificate support
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+
 public class PageGrab
 {
     public static int Main(string[] args)
@@ -27,18 +31,19 @@ public class PageGrab
             if (args.Length == 0 || (args.Length > 0 && args[0] == "/?"))
             {
                 // Print usage
-                Console.WriteLine(@"USAGE: pagegrab.exe [-p http(s)://<proxy>:<proxy_port>] [-m <method>] [-d <URL encoded POST data>] [-h <header_1_name> <header_1_value> [-h <header_2_name> <header_2_value>]] [-v] <URL> [/?]
+                Console.WriteLine(@"USAGE: pagegrab.exe [-p http(s)://<proxy>:<proxy_port>] [-m <method>] [-d <URL encoded POST data>] [-h <header_1_name> <header_1_value> [-h <header_2_name> <header_2_value>]] [-c] [-v] <URL> [/?]
             
+    -c  Display the SSL / TLS certificate
     -v  Print the HTML contents of the response");
                 return 0;
             }
 
             string url = "";
-            string edgeVersion = Registry.GetValue("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}", "pv", "").ToString();
             string userAgent = "";
             string proxyAddress = "";
             string method = "GET";
             string postData = "";
+            bool displaySSLCert = false;
             bool verbose = false;
             Dictionary<string, string> headers = new Dictionary<string, string>();
 
@@ -47,6 +52,16 @@ public class PageGrab
             unsupportedHeaders.Add("Host");
             unsupportedHeaders.Add("If-Modified-Since");
 
+            try
+            {
+                string edgeVersion = Registry.GetValue("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}", "pv", "").ToString();
+                userAgent = String.Format("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{0} Safari/537.36 Edg/{0}", edgeVersion);
+            }
+            catch
+            {
+                // Ignore the error for now
+            }
+
             // Parse arguments
             for (int i = 0; i < args.Length; i++)
             {
@@ -54,6 +69,10 @@ public class PageGrab
 
                 switch (arg.ToUpper())
                 {
+                    case "-C": // Display SSL / TLS certificate
+                        displaySSLCert = true;
+                        break;
+
                     case "-D": // POST data
                         i++;
 
@@ -129,7 +148,7 @@ public class PageGrab
                         break;
 
                     case "-Q": // Query user agent
-                        Console.WriteLine("[*] INFO: Edge version: " + edgeVersion);
+                        Console.WriteLine("[*] User-Agent: {0}", userAgent);
                         return 0;
 
                     case "-V": // Verbose output
@@ -207,18 +226,11 @@ public class PageGrab
                     }
                 }
 
-                // If no user agent is specified, pull the current version of Edge as a default
+                // Throw an exception if no user agent was specified and we weren't able to pull the version of Edge to use as a default
                 // NOTE: This isn't perfect because the AppleWebKit / Safari version number won't match, but it's better probably better than sending nothing
                 if (userAgent == "")
                 {
-                    if (edgeVersion == "")
-                    {
-                        throw new Exception("Unable to auto-detect Edge version; please specify a user agent");
-                    }
-                    else
-                    {
-                        userAgent = String.Format("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{0} Safari/537.36 Edg/{0}", edgeVersion);
-                    }
+                    throw new Exception("Unable to auto-detect Edge version; please specify a user agent");
                 }
 
                 request.UserAgent = userAgent;
@@ -287,7 +299,7 @@ public class PageGrab
                 HttpWebResponse response = (HttpWebResponse)request.GetResponse();
 
                 // Display the status and headers
-                Console.WriteLine("Status: " + response.StatusDescription + "\n");
+                Console.WriteLine("Status: " + response.StatusDescription, Environment.NewLine);
                 Console.WriteLine(response.Headers);
 
                 // Optionally print the HTML from the response
@@ -310,6 +322,26 @@ public class PageGrab
                 }
 
                 response.Close();
+
+                if (displaySSLCert)
+                {
+                    X509Certificate cert = request.ServicePoint.Certificate;
+
+                    Console.WriteLine("SSL / TLS Certificate");
+                    Console.WriteLine("---------------------");
+                    Console.WriteLine("  Subject:           " + cert.Subject);
+                    Console.WriteLine("  Issuer:            " + cert.Issuer);
+                    Console.WriteLine("  Valid From:        " + cert.GetEffectiveDateString());
+                    Console.WriteLine("  Valid To:          " + cert.GetExpirationDateString());
+                    Console.WriteLine("  Serial Number:     " + cert.GetSerialNumberString());
+                    Console.WriteLine("  SHA-1 Fingerprint: " + cert.GetCertHashString());
+                    Console.WriteLine("  Public Key:        " + cert.GetPublicKeyString());
+                    Console.WriteLine("");
+                    Console.WriteLine("Certificate PEM:");
+                    Console.WriteLine("----BEGIN CERTIFICATE----");
+                    Console.WriteLine(System.Convert.ToBase64String(cert.GetRawCertData()));
+                    Console.WriteLine("----END CERTIFICATE----");
+                }
             }
             else
             {
